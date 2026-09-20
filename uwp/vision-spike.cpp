@@ -16,9 +16,9 @@
 #include <string>
 #include <vector>
 
-#include "path_utils.h"
-#include "platform.h"
-#include "utf8_utils.h"
+#include "xllama/path_utils.h"
+#include "xllama/platform.h"
+#include "xllama/utf8_utils.h"
 
 namespace xllama::bridge {
 namespace {
