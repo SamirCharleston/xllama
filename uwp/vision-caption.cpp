@@ -6,6 +6,7 @@
     #include <mtmd-helper.h>
     #include <mtmd.h>
 
+    #include <winrt/Windows.Foundation.h>
     #include <winrt/Windows.Graphics.Imaging.h>
     #include <winrt/Windows.Storage.Streams.h>
     #include <winrt/Windows.Storage.h>
@@ -132,7 +133,7 @@ void run_vision_caption() {
         llama_backend_init();
         llama_model_params model_params = llama_model_default_params();
         model_params.n_gpu_layers = 0;
-        model_params.use_mmap = false;
+        model_params.load_mode = LLAMA_LOAD_MODE_NONE;
         const std::string model_path =
             resolve_local_path("vision-models\\SmolVLM-256M-Instruct-Q8_0.gguf");
         std::unique_ptr<llama_model, decltype(&llama_model_free)> model(
