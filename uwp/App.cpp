@@ -466,6 +466,14 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 winrt::make<HeadlessView>(&::xllama::bridge::run_oprepro, "oprepro"));
             return 0; // not reached: CoreApplication::Exit terminates the process
         }
+        std::wstring vision_caption_flag = flag_path_if_present(L"vision-caption.flag");
+        if (!vision_caption_flag.empty()) {
+            _wremove(vision_caption_flag.c_str());
+            ::xllama::log_output("[xllama] vision-caption.flag detected -> headless image caption\n");
+            winrt::Windows::ApplicationModel::Core::CoreApplication::Run(
+                winrt::make<HeadlessView>(&::xllama::bridge::run_vision_caption, "vision-caption"));
+            return 0;
+        }
         std::wstring vision_flag = flag_path_if_present(L"vision.flag");
         if (!vision_flag.empty()) {
             _wremove(vision_flag.c_str());

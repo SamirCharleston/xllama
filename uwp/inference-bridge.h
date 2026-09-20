@@ -81,6 +81,9 @@ void run_oprepro();
 // Runtime + DirectML inside the Xbox UWP/Game environment.
 void run_vision_spike();
 
+// Local SmolVLM image caption probe. Triggered by LocalFolder\vision-caption.flag.
+void run_vision_caption();
+
 // Lane B on-device training (ggml-opt partial FT). Triggered by
 // LocalFolder\train.flag; reads the job from LocalState\training\job.json
 // (paths inside the job are resolved relative to LocalState), runs

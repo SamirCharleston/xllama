@@ -117,6 +117,7 @@
         $(ProjectDir)..\shaders\generated;
         $(ProjectDir)..\llama.cpp\include;
         $(ProjectDir)..\llama.cpp\ggml\include;
+        $(ProjectDir)..\llama.cpp\tools\mtmd;
         $(ProjectDir)packages\Microsoft.ML.OnnxRuntimeGenAI.DirectML.0.14.1\build\native\include;
         $(ProjectDir)packages\Microsoft.ML.OnnxRuntime.DirectML.1.24.4\build\native\include;
         %(AdditionalIncludeDirectories)
@@ -340,6 +341,7 @@
     <ClCompile Include="diffuse.cpp" />
     <ClCompile Include="op-repro.cpp" />
     <ClCompile Include="vision-spike.cpp" />
+    <ClCompile Include="vision-caption.cpp" />
   </ItemGroup>
 
   <!-- xllama UWP app -->
