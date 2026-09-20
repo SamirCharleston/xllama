@@ -142,7 +142,7 @@ void run_vision_spike() {
         auto input_info =
             input_type.GetTensorTypeAndShapeInfo();
 
-        const auto input_shape =
+        auto input_shape =
             input_info.GetShape();
 
         if (input_info.GetElementType() !=
@@ -152,10 +152,13 @@ void run_vision_spike() {
 
         size_t input_count = 1;
 
-        for (int64_t d : input_shape) {
+        // Resolve dynamic dimensions for the synthetic V1 test.
+        // MobileNetV2 may expose a dynamic batch dimension (-1).
+        // For this spike we execute a single image/batch.
+        for (auto& d : input_shape) {
             if (d <= 0)
-                throw std::runtime_error(
-                    "vision-v1 requires static input shape");
+                d = 1;
+
             input_count *= static_cast<size_t>(d);
         }
 
