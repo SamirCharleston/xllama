@@ -466,6 +466,15 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 winrt::make<HeadlessView>(&::xllama::bridge::run_oprepro, "oprepro"));
             return 0; // not reached: CoreApplication::Exit terminates the process
         }
+        std::wstring vision_flag = flag_path_if_present(L"vision.flag");
+        if (!vision_flag.empty()) {
+            _wremove(vision_flag.c_str());
+            ::xllama::log_output(
+                "[xllama] vision.flag detected -> headless vision DirectML spike\n");
+            winrt::Windows::ApplicationModel::Core::CoreApplication::Run(
+                winrt::make<HeadlessView>(&::xllama::bridge::run_vision_spike, "vision"));
+            return 0; // not reached: CoreApplication::Exit terminates the process
+        }
         std::wstring train_flag = flag_path_if_present(L"train.flag");
         if (!train_flag.empty()) {
             _wremove(train_flag.c_str());

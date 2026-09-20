@@ -339,6 +339,7 @@
     <ClCompile Include="native_capture.cpp" />
     <ClCompile Include="diffuse.cpp" />
     <ClCompile Include="op-repro.cpp" />
+    <ClCompile Include="vision-spike.cpp" />
   </ItemGroup>
 
   <!-- xllama UWP app -->

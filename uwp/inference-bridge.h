@@ -76,6 +76,11 @@ void run_logits();
 // -> MVN2 UseMean=false, the #91 root cause).
 void run_oprepro();
 
+// Vision / DirectML technical spike. Triggered by LocalFolder\vision.flag.
+// V0 validates that a dedicated vision surface can initialize plain ONNX
+// Runtime + DirectML inside the Xbox UWP/Game environment.
+void run_vision_spike();
+
 // Lane B on-device training (ggml-opt partial FT). Triggered by
 // LocalFolder\train.flag; reads the job from LocalState\training\job.json
 // (paths inside the job are resolved relative to LocalState), runs
