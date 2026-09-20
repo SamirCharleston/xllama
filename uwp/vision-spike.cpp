@@ -6,6 +6,11 @@
 #include <onnxruntime_cxx_api.h>
 #include <dml_provider_factory.h>
 
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Imaging.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Streams.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
