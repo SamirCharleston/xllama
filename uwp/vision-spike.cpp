@@ -1,145 +1,337 @@
-// vision-spike.cpp — Xbox vision / DirectML technical spike.
-//
-// V0 deliberately does not load a vision model yet.
-// Its only purpose is to prove that a dedicated vision execution surface
-// can initialize ONNX Runtime and the DirectML execution provider inside
-// the deployed Xbox UWP/Game package.
-//
-// Trigger:
-//   LocalState\vision.flag
-//
-// Outputs:
-//   LocalState\vision-result.json
-//   LocalState\vision.done
-
 #include "inference-bridge.h"
 
 #ifdef XLLAMA_UWP
 
-// clang-format off
-    #include <windows.h>
-    #include <onnxruntime_cxx_api.h>
-    #include <dml_provider_factory.h>
-// clang-format on
+#include <windows.h>
+#include <onnxruntime_cxx_api.h>
+#include <dml_provider_factory.h>
 
-    #include <chrono>
-    #include <cstdio>
-    #include <exception>
-    #include <string>
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <exception>
+#include <numeric>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
-    #include "xllama/path_utils.h"
-    #include "xllama/platform.h"
-    #include "xllama/utf8_utils.h"
+#include "path_utils.h"
+#include "platform.h"
+#include "utf8_utils.h"
 
 namespace xllama::bridge {
-
 namespace {
 
-void write_text(const char* name, const std::string& value) {
-    const std::string path = resolve_local_path(name);
-    FILE* fp = _wfopen(utf8_to_wstring(path).c_str(), L"wb");
-    if (!fp)
-        return;
-    fwrite(value.data(), 1, value.size(), fp);
-    fclose(fp);
+using Clock = std::chrono::steady_clock;
+
+long long elapsed_ms(Clock::time_point start, Clock::time_point end) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 }
 
 std::string json_escape(const std::string& s) {
     std::string out;
-    out.reserve(s.size() + 16);
-
-    for (unsigned char c : s) {
+    for (char c : s) {
         switch (c) {
         case '\\': out += "\\\\"; break;
         case '"':  out += "\\\""; break;
-        case '\n': out += "\\n";  break;
-        case '\r': out += "\\r";  break;
-        case '\t': out += "\\t";  break;
-        default:
-            if (c >= 0x20)
-                out += static_cast<char>(c);
-            break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:   out += c; break;
         }
     }
-
     return out;
 }
 
-void write_result(bool ok,
-                  const std::string& stage,
-                  long long elapsed_ms,
-                  const std::string& error = {}) {
-    std::string json =
-        "{\n"
-        "  \"spike\": \"vision-v0\",\n"
-        "  \"backend\": \"onnxruntime-directml\",\n"
-        "  \"device_id\": 0,\n"
-        "  \"status\": \"" + std::string(ok ? "PASS" : "FAIL") + "\",\n"
-        "  \"stage\": \"" + json_escape(stage) + "\",\n"
-        "  \"elapsed_ms\": " + std::to_string(elapsed_ms);
+std::string shape_json(const std::vector<int64_t>& shape) {
+    std::ostringstream os;
+    os << "[";
+    for (size_t i = 0; i < shape.size(); ++i) {
+        if (i)
+            os << ", ";
+        os << shape[i];
+    }
+    os << "]";
+    return os.str();
+}
 
-    if (!error.empty())
-        json += ",\n  \"error\": \"" + json_escape(error) + "\"";
+void write_text(const std::string& name, const std::string& text) {
+    const auto path = utf8_to_wstring(resolve_local_path(name));
+    FILE* fp = _wfopen(path.c_str(), L"wb");
+    if (!fp)
+        return;
+    fwrite(text.data(), 1, text.size(), fp);
+    fclose(fp);
+}
 
-    json += "\n}\n";
+void write_done(const std::string& text) {
+    write_text("vision.done", text);
+}
 
-    write_text("vision-result.json", json);
-    write_text("vision.done", ok ? "ok" : "error");
+void write_failure(const std::string& stage, const std::string& error) {
+    std::ostringstream os;
+    os << "{\n"
+       << "  \"spike\": \"vision-v1\",\n"
+       << "  \"backend\": \"onnxruntime-directml\",\n"
+       << "  \"device_id\": 0,\n"
+       << "  \"status\": \"FAIL\",\n"
+       << "  \"stage\": \"" << json_escape(stage) << "\",\n"
+       << "  \"error\": \"" << json_escape(error) << "\"\n"
+       << "}\n";
+
+    write_text("vision-result.json", os.str());
+    write_done("error");
 }
 
 } // namespace
 
 void run_vision_spike() {
     set_cwd_to_local_folder();
-    log_output("[xllama] vision-spike: V0 starting\n");
+    log_output("[xllama] vision-v1: starting MobileNetV2 DirectML spike\n");
 
-    const auto started = std::chrono::steady_clock::now();
+    std::string stage = "initializing";
 
     try {
-        // Creating the ORT environment validates the plain ORT runtime surface.
-        Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "vision-spike");
-        log_output("[xllama] vision-spike: ORT environment created\n");
+        const std::string model_rel =
+            "vision-models\\mobilenetv2-12.onnx";
+        const std::string model_path =
+            resolve_local_path(model_rel);
 
-        // Match the DirectML session requirements already used by diffuse.cpp
-        // and op-repro.cpp. We intentionally stop before constructing a Session:
-        // V1 will do that with a real visual encoder ONNX model.
+        stage = "ort_environment";
+        Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "vision-v1");
+
+        stage = "directml_session";
+
         Ort::SessionOptions so;
         so.SetExecutionMode(ORT_SEQUENTIAL);
         so.DisableMemPattern();
         so.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
 
         Ort::ThrowOnError(
-            OrtSessionOptionsAppendExecutionProvider_DML(so, /*device_id=*/0));
+            OrtSessionOptionsAppendExecutionProvider_DML(so, 0));
 
-        log_output("[xllama] vision-spike: DirectML EP registered\n");
+        const auto load_start = Clock::now();
 
-        const auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - started)
-                .count();
+        Ort::Session session(
+            env,
+            utf8_to_wstring(model_path).c_str(),
+            so);
 
-        write_result(true, "directml_ep_registered", elapsed);
-        log_output("[xllama] vision-spike: PASS\n");
+        const auto load_end = Clock::now();
+
+        log_output("[xllama] vision-v1: DML session created\n");
+
+        stage = "input_introspection";
+
+        if (session.GetInputCount() != 1)
+            throw std::runtime_error(
+                "vision-v1 expects exactly one model input");
+
+        Ort::AllocatorWithDefaultOptions alloc;
+
+        auto input_name_holder =
+            session.GetInputNameAllocated(0, alloc);
+
+        const std::string input_name =
+            input_name_holder.get();
+
+        Ort::TypeInfo input_type =
+            session.GetInputTypeInfo(0);
+
+        auto input_info =
+            input_type.GetTensorTypeAndShapeInfo();
+
+        const auto input_shape =
+            input_info.GetShape();
+
+        if (input_info.GetElementType() !=
+            ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
+            throw std::runtime_error(
+                "vision-v1 expects FP32 input");
+
+        size_t input_count = 1;
+
+        for (int64_t d : input_shape) {
+            if (d <= 0)
+                throw std::runtime_error(
+                    "vision-v1 requires static input shape");
+            input_count *= static_cast<size_t>(d);
+        }
+
+        // Deterministic synthetic image tensor.
+        // Values cover roughly [0,1] repeatedly; this is not intended
+        // to classify a meaningful image. It proves real tensor execution.
+        std::vector<float> input_data(input_count);
+
+        for (size_t i = 0; i < input_count; ++i)
+            input_data[i] =
+                static_cast<float>(i % 256) / 255.0f;
+
+        Ort::MemoryInfo mem =
+            Ort::MemoryInfo::CreateCpu(
+                OrtDeviceAllocator,
+                OrtMemTypeCPU);
+
+        Ort::Value input_tensor =
+            Ort::Value::CreateTensor<float>(
+                mem,
+                input_data.data(),
+                input_data.size(),
+                input_shape.data(),
+                input_shape.size());
+
+        stage = "output_introspection";
+
+        const size_t output_count =
+            session.GetOutputCount();
+
+        if (output_count == 0)
+            throw std::runtime_error(
+                "model has no outputs");
+
+        std::vector<Ort::AllocatedStringPtr>
+            output_name_holders;
+
+        std::vector<const char*>
+            output_names;
+
+        output_name_holders.reserve(output_count);
+        output_names.reserve(output_count);
+
+        for (size_t i = 0; i < output_count; ++i) {
+            output_name_holders.push_back(
+                session.GetOutputNameAllocated(i, alloc));
+
+            output_names.push_back(
+                output_name_holders.back().get());
+        }
+
+        const char* input_names[] = {
+            input_name_holder.get()
+        };
+
+        stage = "session_run";
+
+        const auto run_start = Clock::now();
+
+        auto outputs =
+            session.Run(
+                Ort::RunOptions{nullptr},
+                input_names,
+                &input_tensor,
+                1,
+                output_names.data(),
+                output_names.size());
+
+        const auto run_end = Clock::now();
+
+        if (outputs.empty())
+            throw std::runtime_error(
+                "Session.Run returned no outputs");
+
+        stage = "output_validation";
+
+        auto output_info =
+            outputs[0].GetTensorTypeAndShapeInfo();
+
+        const auto output_shape =
+            output_info.GetShape();
+
+        if (output_info.GetElementType() !=
+            ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
+            throw std::runtime_error(
+                "vision-v1 expects FP32 output");
+
+        const size_t output_elements =
+            output_info.GetElementCount();
+
+        const float* output_data =
+            outputs[0].GetTensorData<float>();
+
+        if (!output_data || output_elements == 0)
+            throw std::runtime_error(
+                "empty output tensor");
+
+        const size_t sample_count =
+            std::min<size_t>(10, output_elements);
+
+        std::ostringstream sample;
+        sample << "[";
+
+        for (size_t i = 0; i < sample_count; ++i) {
+            if (i)
+                sample << ", ";
+            sample << output_data[i];
+        }
+
+        sample << "]";
+
+        const auto max_it =
+            std::max_element(
+                output_data,
+                output_data + output_elements);
+
+        const size_t max_index =
+            static_cast<size_t>(
+                std::distance(output_data, max_it));
+
+        stage = "session_run_completed";
+
+        std::ostringstream result;
+
+        result
+            << "{\n"
+            << "  \"spike\": \"vision-v1\",\n"
+            << "  \"backend\": \"onnxruntime-directml\",\n"
+            << "  \"device_id\": 0,\n"
+            << "  \"status\": \"PASS\",\n"
+            << "  \"stage\": \"session_run_completed\",\n"
+            << "  \"model\": \"mobilenetv2-12.onnx\",\n"
+            << "  \"input_name\": \""
+            << json_escape(input_name) << "\",\n"
+            << "  \"input_shape\": "
+            << shape_json(input_shape) << ",\n"
+            << "  \"output_shape\": "
+            << shape_json(output_shape) << ",\n"
+            << "  \"model_load_ms\": "
+            << elapsed_ms(load_start, load_end) << ",\n"
+            << "  \"inference_ms\": "
+            << elapsed_ms(run_start, run_end) << ",\n"
+            << "  \"input_elements\": "
+            << input_count << ",\n"
+            << "  \"output_elements\": "
+            << output_elements << ",\n"
+            << "  \"max_output_index\": "
+            << max_index << ",\n"
+            << "  \"max_output_value\": "
+            << *max_it << ",\n"
+            << "  \"output_sample\": "
+            << sample.str() << "\n"
+            << "}\n";
+
+        write_text(
+            "vision-result.json",
+            result.str());
+
+        write_done("ok");
+
+        log_output(
+            "[xllama] vision-v1: Session.Run completed successfully\n");
 
     } catch (const Ort::Exception& e) {
-        const auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - started)
-                .count();
+        log_output(
+            std::string("[xllama] vision-v1 ORT error: ") +
+            e.what() + "\n");
 
-        write_result(false, "onnxruntime", elapsed, e.what());
-        log_output(std::string("[xllama] vision-spike ORT error: ") +
-                   e.what() + "\n");
+        write_failure(stage, e.what());
 
     } catch (const std::exception& e) {
-        const auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - started)
-                .count();
+        log_output(
+            std::string("[xllama] vision-v1 error: ") +
+            e.what() + "\n");
 
-        write_result(false, "exception", elapsed, e.what());
-        log_output(std::string("[xllama] vision-spike error: ") +
-                   e.what() + "\n");
+        write_failure(stage, e.what());
     }
 }
 
