@@ -108,6 +108,9 @@ std::string read_local_text(const char* name) {
     return out;
 }
 
+bool base64_decode(std::string encoded, std::string& out);
+bool write_file_bytes(const std::string& path, const std::string& bytes);
+
 // Xbox blocks binding ports in [57344, 65535] (traffic is silently dropped, per
 // the UWP-on-Xbox known-issues doc); 11443 is the Device Portal. Reject those so
 // an api-port.txt typo fails loudly to the default rather than binding a dead
