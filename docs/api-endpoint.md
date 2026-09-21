@@ -89,7 +89,9 @@ state is invalidated — see Model above).
 Request body (subset): `model`, `messages[]` (`role` ∈ system/user/assistant, `content`),
 optional `max_completion_tokens` / `max_tokens` (default 512; the former wins — `max_tokens`
 is the deprecated OpenAI alias), `temperature`, `top_p`, `seed` (reproducibility),
-`stop` (string or array, added to the format's own stops), and boolean `vision_context`.
+`stop` (string or array, added to the format's own stops), boolean `vision_context`,
+and optional `vision_image_base64`. When the latter is present, the server runs
+SmolVLM on that image and automatically enables `vision_context` for the turn.
 When `vision_context` is `true`, the latest PASS caption from
 `vision-caption-result.json` is appended to the final user message. If no completed
 caption is available, the request returns `409`. `messages` must be a JSON array

@@ -290,22 +290,13 @@ std::string handle_vision_caption_status(const char*& status) {
     return raw;
 }
 
-// POST /v1/vision/caption — accept one image and run the local caption probe.
-// The caller sends {"image_base64":"..."}; the body is capped by the HTTP
-// reader at 8 MiB. The resident text Session is released by the caller before
-// run_vision_caption() so the two models are never held concurrently.
-std::string handle_vision_caption_request(const std::string& body, const char*& status) {
-    JsonObject root{nullptr};
-    if (!JsonObject::TryParse(winrt::to_hstring(body), root) || root == nullptr) {
-        status = "400 Bad Request";
-        return error_json("invalid JSON body");
-    }
-    const std::string encoded = winrt::to_string(root.GetNamedString(L"image_base64", L""));
+// Decode and run one caption while session_hub().mtx is held by the caller.
+// The request body is capped at 8 MiB; decoded images are capped at 6 MiB.
+std::string run_vision_caption_image(const std::string& encoded, const char*& status) {
     if (encoded.empty()) {
         status = "400 Bad Request";
         return error_json("missing image_base64");
     }
-
     std::string image;
     if (!base64_decode(encoded, image)) {
         status = "400 Bad Request";
@@ -327,6 +318,17 @@ std::string handle_vision_caption_request(const std::string& body, const char*& 
     ::xllama::session_hub().reset_locked();
     ::xllama::bridge::run_vision_caption();
     return handle_vision_caption_status(status);
+}
+
+// POST /v1/vision/caption — accept one image and run the local caption probe.
+std::string handle_vision_caption_request(const std::string& body, const char*& status) {
+    JsonObject root{nullptr};
+    if (!JsonObject::TryParse(winrt::to_hstring(body), root) || root == nullptr) {
+        status = "400 Bad Request";
+        return error_json("invalid JSON body");
+    }
+    return run_vision_caption_image(winrt::to_string(root.GetNamedString(L"image_base64", L"")),
+                                    status);
 }
 
 // ---------------------------------------------------------------------------
@@ -432,10 +434,26 @@ std::string handle_chat_locked(const std::string& body, const char*& status) {
         return error_json("no user message to complete");
     }
 
+    // Single-call multimodal convenience for the Xbox Agent. The visual
+    // worker runs while the hub lock is held, then the requested text Session
+    // is lazily recreated below.
+    bool vision_context = root.GetNamedBoolean(L"vision_context", false);
+    if (root.HasKey(L"vision_image_base64")) {
+        const std::string encoded =
+            winrt::to_string(root.GetNamedString(L"vision_image_base64", L""));
+        const char* vision_status = "200 OK";
+        const std::string vision_result = run_vision_caption_image(encoded, vision_status);
+        if (std::string(vision_status) != "200 OK") {
+            status = vision_status;
+            return vision_result;
+        }
+        vision_context = true;
+    }
+
     // Optional visual grounding for the Xbox Agent. The caption is produced by
     // the separate mtmd probe and persisted in LocalState; consuming it here
     // keeps the normal text Session as the only resident chat model.
-    if (root.GetNamedBoolean(L"vision_context", false)) {
+    if (vision_context) {
         const std::string caption = read_completed_vision_caption();
         if (caption.empty()) {
             status = "409 Conflict";
