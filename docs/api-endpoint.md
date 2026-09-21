@@ -58,6 +58,7 @@ this is Dev Mode research, not a hosted service.
 | `POST`    | `/v1/chat/completions`   | OpenAI-compatible chat completion, **non-streaming**.                                                                                             |
 | `POST`    | `/v1/preferences`        | Append a preference sample (`label` + `messages[]`) to `training/samples.jsonl` — same contract as the UI rate op (#118).                         |
 | `GET`     | `/v1/training/status`    | `result.done` / `progress.json` / last personalized `result.json` + usable sample count (#118).                                                   |
+| `GET`     | `/v1/vision/caption`     | Last completed Xbox Vision caption from `vision-caption-result.json`; returns `404` until a caption exists and `409` for a failed probe.           |
 | `POST`    | `/v1/images/generations` | SD-Turbo image gen (`prompt`, `steps` 1–4, `seed`); returns OpenAI-ish `{data:[{b64_json,path}]}` (#118). Shares the single-slot mutex with chat. |
 | `OPTIONS` | _any_                    | CORS preflight (`204` + `Allow-Methods/Headers`) for browser clients.                                                                             |
 
@@ -72,8 +73,11 @@ state is invalidated — see Model above).
 
 Request body (subset): `model`, `messages[]` (`role` ∈ system/user/assistant, `content`),
 optional `max_completion_tokens` / `max_tokens` (default 512; the former wins — `max_tokens`
-is the deprecated OpenAI alias), `temperature`, `top_p`, `seed` (reproducibility), and
-`stop` (string or array, added to the format's own stops). `messages` must be a JSON array
+is the deprecated OpenAI alias), `temperature`, `top_p`, `seed` (reproducibility),
+`stop` (string or array, added to the format's own stops), and boolean `vision_context`.
+When `vision_context` is `true`, the latest PASS caption from
+`vision-caption-result.json` is appended to the final user message. If no completed
+caption is available, the request returns `409`. `messages` must be a JSON array
 and contain a trailing user turn, else `400`. When no `system` message is sent, a default
 one is injected (small instruct models degrade with an empty system turn). Other unknown
 Most unsupported fields are ignored for compatibility, but tool-related fields

@@ -250,6 +250,43 @@ std::string error_json(const std::string& msg) {
     return winrt::to_string(root.Stringify());
 }
 
+// The vision probe writes a small structured result in LocalState. Keep the
+// bridge file based so the caption worker and the LAN API do not need to own
+// two resident llama sessions at once. An empty return means there is no
+// completed caption available.
+std::string read_completed_vision_caption() {
+    const std::string raw = read_local_text("vision-caption-result.json");
+    if (raw.empty())
+        return {};
+
+    JsonObject result{nullptr};
+    if (!JsonObject::TryParse(winrt::to_hstring(raw), result) || result == nullptr)
+        return {};
+    if (winrt::to_string(result.GetNamedString(L"status", L"")) != "PASS")
+        return {};
+    return winrt::to_string(result.GetNamedString(L"description", L""));
+}
+
+std::string handle_vision_caption_status(const char*& status) {
+    const std::string raw = read_local_text("vision-caption-result.json");
+    if (raw.empty()) {
+        status = "404 Not Found";
+        return error_json("no vision caption result is available");
+    }
+
+    JsonObject result{nullptr};
+    if (!JsonObject::TryParse(winrt::to_hstring(raw), result) || result == nullptr) {
+        status = "500 Internal Server Error";
+        return error_json("vision caption result is malformed");
+    }
+    if (winrt::to_string(result.GetNamedString(L"status", L"")) != "PASS") {
+        status = "409 Conflict";
+        return raw;
+    }
+    status = "200 OK";
+    return raw;
+}
+
 // ---------------------------------------------------------------------------
 // OpenAI /v1/chat/completions
 // ---------------------------------------------------------------------------
@@ -352,6 +389,20 @@ std::string handle_chat_locked(const std::string& body, const char*& status) {
         status = "400 Bad Request";
         return error_json("no user message to complete");
     }
+
+    // Optional visual grounding for the Xbox Agent. The caption is produced by
+    // the separate mtmd probe and persisted in LocalState; consuming it here
+    // keeps the normal text Session as the only resident chat model.
+    if (root.GetNamedBoolean(L"vision_context", false)) {
+        const std::string caption = read_completed_vision_caption();
+        if (caption.empty()) {
+            status = "409 Conflict";
+            return error_json(
+                "vision_context requested but no completed vision caption is available");
+        }
+        final_user += "\n\nVisual context from Xbox Vision: " + caption;
+    }
+
     // Lazily (re)create the resident Session when the requested model differs
     // (hub.mtx is held by the caller; the swap invalidates the GUI's KV-reuse
     // state via hub.generation, which its next turn detects). Catalogue n_ctx
@@ -796,6 +847,13 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
         }
         if (req.method == "GET" && req.path == "/api/tags") {
             write_response(socket, "200 OK", tags_json());
+            return;
+        }
+
+        if (req.method == "GET" && req.path == "/v1/vision/caption") {
+            const char* status = "200 OK";
+            const std::string json = handle_vision_caption_status(status);
+            write_response(socket, status, json);
             return;
         }
 
