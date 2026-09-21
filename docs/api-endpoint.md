@@ -59,8 +59,23 @@ this is Dev Mode research, not a hosted service.
 | `POST`    | `/v1/preferences`        | Append a preference sample (`label` + `messages[]`) to `training/samples.jsonl` — same contract as the UI rate op (#118).                         |
 | `GET`     | `/v1/training/status`    | `result.done` / `progress.json` / last personalized `result.json` + usable sample count (#118).                                                   |
 | `GET`     | `/v1/vision/caption`     | Last completed Xbox Vision caption from `vision-caption-result.json`; returns `404` until a caption exists and `409` for a failed probe.           |
+| `POST`    | `/v1/vision/caption`     | Accepts `{"image_base64":"..."}`, runs SmolVLM locally, and returns the completed caption. Releases the resident text Session during the probe. |
 | `POST`    | `/v1/images/generations` | SD-Turbo image gen (`prompt`, `steps` 1–4, `seed`); returns OpenAI-ish `{data:[{b64_json,path}]}` (#118). Shares the single-slot mutex with chat. |
 | `OPTIONS` | _any_                    | CORS preflight (`204` + `Allow-Methods/Headers`) for browser clients.                                                                             |
+
+### Vision caption (`POST /v1/vision/caption`)
+
+The image client sends a JSON body with a Base64 encoded JPEG or PNG. The server
+writes it to the app's `LocalState\vision-input.jpg`, runs the local SmolVLM
+probe, and returns the same structured result exposed by the `GET` endpoint.
+The request is serialized with chat inference and the text Session is released
+while the visual model is resident.
+
+```bash
+curl -s http://<ip-xbox>:11434/v1/vision/caption \
+  -H 'Content-Type: application/json' \
+  -d "{\"image_base64\":\"$(base64 -w0 image.jpeg)\"}"
+```
 
 Discovery semantics: a model is **servable** when its `LocalState\models\<id>`
 directory holds a base GGUF (any `*.gguf` except a bare runtime-LoRA

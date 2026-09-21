@@ -287,6 +287,45 @@ std::string handle_vision_caption_status(const char*& status) {
     return raw;
 }
 
+// POST /v1/vision/caption — accept one image and run the local caption probe.
+// The caller sends {"image_base64":"..."}; the body is capped by the HTTP
+// reader at 8 MiB. The resident text Session is released by the caller before
+// run_vision_caption() so the two models are never held concurrently.
+std::string handle_vision_caption_request(const std::string& body, const char*& status) {
+    JsonObject root{nullptr};
+    if (!JsonObject::TryParse(winrt::to_hstring(body), root) || root == nullptr) {
+        status = "400 Bad Request";
+        return error_json("invalid JSON body");
+    }
+    const std::string encoded = winrt::to_string(root.GetNamedString(L"image_base64", L""));
+    if (encoded.empty()) {
+        status = "400 Bad Request";
+        return error_json("missing image_base64");
+    }
+
+    std::string image;
+    if (!base64_decode(encoded, image)) {
+        status = "400 Bad Request";
+        return error_json("image_base64 is invalid");
+    }
+    if (image.size() > 6 * 1024 * 1024) {
+        status = "413 Content Too Large";
+        return error_json("decoded image exceeds 6 MiB");
+    }
+
+    const std::string image_path = ::xllama::resolve_local_path("vision-input.jpg");
+    if (!write_file_bytes(image_path, image)) {
+        status = "500 Internal Server Error";
+        return error_json("could not write vision-input.jpg");
+    }
+
+    // The caller holds session_hub().mtx. Release the text model only after
+    // validation and image persistence have succeeded.
+    ::xllama::session_hub().reset_locked();
+    ::xllama::bridge::run_vision_caption();
+    return handle_vision_caption_status(status);
+}
+
 // ---------------------------------------------------------------------------
 // OpenAI /v1/chat/completions
 // ---------------------------------------------------------------------------
@@ -644,6 +683,33 @@ std::string base64_encode(const std::string& in) {
     return out;
 }
 
+bool base64_decode(std::string encoded, std::string& out) {
+    const size_t data_uri = encoded.find("base64,");
+    if (data_uri != std::string::npos)
+        encoded.erase(0, data_uri + 7);
+
+    static const std::string alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    out.clear();
+    out.reserve((encoded.size() / 4) * 3);
+    int value = 0;
+    int bits = -8;
+    for (const unsigned char c : encoded) {
+        if (c == '=' || c == ' ' || c == '\r' || c == '\n' || c == '\t')
+            continue;
+        const size_t digit = alphabet.find(c);
+        if (digit == std::string::npos)
+            return false;
+        value = (value << 6) | static_cast<int>(digit);
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back(static_cast<char>((value >> bits) & 0xff));
+            bits -= 8;
+        }
+    }
+    return !out.empty();
+}
+
 std::string read_file_bytes(const std::string& path) {
     FILE* f = _wfopen(::xllama::utf8_to_wstring(path).c_str(), L"rb");
     if (!f)
@@ -655,6 +721,15 @@ std::string read_file_bytes(const std::string& path) {
         out.append(buf, n);
     fclose(f);
     return out;
+}
+
+bool write_file_bytes(const std::string& path, const std::string& bytes) {
+    FILE* f = _wfopen(::xllama::utf8_to_wstring(path).c_str(), L"wb");
+    if (!f)
+        return false;
+    const size_t written = fwrite(bytes.data(), 1, bytes.size(), f);
+    fclose(f);
+    return written == bytes.size();
 }
 
 // POST /v1/preferences — append one preference sample (same contract as UI rate).
@@ -853,6 +928,33 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
         if (req.method == "GET" && req.path == "/v1/vision/caption") {
             const char* status = "200 OK";
             const std::string json = handle_vision_caption_status(status);
+            write_response(socket, status, json);
+            return;
+        }
+
+        if (req.method == "POST" && req.path == "/v1/vision/caption") {
+            std::unique_lock<std::mutex> lk = acquire_hub_or_busy();
+            if (!lk.owns_lock()) {
+                write_response(socket, "503 Service Unavailable", error_json("busy"));
+                return;
+            }
+            bool active = false;
+            {
+                std::lock_guard<std::mutex> state_lock(g_state_mtx);
+                active = g_status.state == ServerState::Running && generation == g_generation;
+            }
+            if (!active) {
+                write_response(socket, "503 Service Unavailable", error_json("server stopped"));
+                return;
+            }
+            const char* status = "200 OK";
+            std::string json;
+            try {
+                json = handle_vision_caption_request(req.body, status);
+            } catch (...) {
+                status = "500 Internal Server Error";
+                json = error_json("vision caption failed");
+            }
             write_response(socket, status, json);
             return;
         }
