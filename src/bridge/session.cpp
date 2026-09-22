@@ -475,10 +475,14 @@ class LlamaSession final : public Session {
             // default is GGML_DEFAULT_N_THREADS (4) regardless of n_threads —
             // left unset it caps prefill at 4 threads while decode gets 6 (#168).
             cparams.n_threads_batch = m_n_threads;
-            if (m_n_batch > 0)
-                cparams.n_batch = static_cast<uint32_t>(m_n_batch);
-            if (m_n_ubatch > 0)
-                cparams.n_ubatch = static_cast<uint32_t>(m_n_ubatch);
+            // Keep the context workspace bounded on Xbox. Newer llama.cpp
+            // defaults can select a 2048-token batch even for a small context;
+            // that workspace makes Qwen 1.5B/3B context creation fail under the
+            // AppContainer budget although the GGUF itself loads correctly.
+            // Explicitly cap the default batch while preserving caller overrides.
+            const uint32_t safe_batch = static_cast<uint32_t>(std::min(m_n_ctx, 512));
+            cparams.n_batch = static_cast<uint32_t>(m_n_batch > 0 ? m_n_batch : safe_batch);
+            cparams.n_ubatch = static_cast<uint32_t>(m_n_ubatch > 0 ? m_n_ubatch : safe_batch);
             if (m_kv_q8) {
                 // #171: quantized V requires flash attention (the pin throws at
                 // context creation with FA disabled, and AUTO may resolve to
