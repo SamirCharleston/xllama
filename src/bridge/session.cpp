@@ -1059,7 +1059,14 @@ class LlamaSession final : public Session {
 };
 
 namespace detail {
+static void llama_diagnostic_log(enum ggml_log_level level, const char* text, void*) {
+    if (!text || level < GGML_LOG_LEVEL_WARN)
+        return;
+    log_output(std::string("[xllama] llama: ") + text);
+}
+
 std::unique_ptr<Session> create_llama(const SessionParams& sp, std::string* err) {
+    llama_log_set(llama_diagnostic_log, nullptr);
     // resolve_model_path yields a FILE path on Linux (a direct .gguf) but the
     // model DIRECTORY on UWP (catalogue layout LocalState\models\<name>\). llama
     // loads a file, so descend into a directory and pick the single .gguf inside.
