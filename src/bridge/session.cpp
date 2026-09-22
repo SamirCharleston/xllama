@@ -1084,6 +1084,13 @@ std::unique_ptr<Session> create_llama(const SessionParams& sp, std::string* err)
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = sp.n_gpu_layers;
+#ifdef _WIN32
+    // UWP/AppContainer cannot afford llama.cpp's temporary CPU_REPACK buffer
+    // for Q4_K models (~1.3 GB for Qwen 3B). Keep the original quantized
+    // tensors and avoid the extra allocation; this is required on Xbox where
+    // mmap is unavailable and the repack buffer otherwise exhausts the budget.
+    mparams.use_extra_bufts = false;
+#endif
 
     llama_model* raw_model = llama_model_load_from_file(abs_path.c_str(), mparams);
     if (!raw_model) {
